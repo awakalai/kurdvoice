@@ -80,15 +80,23 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
         lkRoom.current = null;
       }
       const token = await getLiveKitToken(room.id);
-      const r = new Room({ adaptiveStream: true });
+      const r = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+        reconnectPolicy: { maxRetries: 5 },
+      });
       r.on(RoomEvent.TrackSubscribed, (track) => {
         if (track.kind === "audio" && audioBox.current) {
           const el = track.attach();
+          el.autoplay = true;
+          el.setAttribute("playsinline", "");
           audioBox.current.appendChild(el);
         }
       });
       r.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
       r.on(RoomEvent.ActiveSpeakersChanged, (sp) => setSpeakingIds(sp.map((s) => s.identity)));
+      r.on(RoomEvent.Reconnecting, () => setVoiceStatus("connecting"));
+      r.on(RoomEvent.Reconnected, () => setVoiceStatus("on"));
       r.on(RoomEvent.Disconnected, () => setVoiceStatus("off"));
       await r.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, token);
       lkRoom.current = r;
