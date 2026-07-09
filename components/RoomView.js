@@ -150,23 +150,25 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
     prevMic.current = myMicOn;
 
     (async () => {
-      if (!lkRoom.current) return;
-      try {
-        // تۆکنێکی نوێ بە مۆڵەتی نوێوە — بەبێ پچڕاندنی پەیوەندی
-        const token = await getLiveKitToken(room.id);
-        await lkRoom.current.localParticipant.setMicrophoneEnabled(false);
-        setMicLive(false);
-        if (typeof lkRoom.current.engine?.client?.sendUpdateLocalMetadata === "function") {
-          // هیچ
+      setMicLive(false);
+      if (myMicOn) {
+        // مۆڵەتی مایک دراوە: پەیوەندی نوێ بە تۆکنی نوێ (canPublish=true)
+        if (lkRoom.current) {
+          lkRoom.current.removeAllListeners();
+          await lkRoom.current.disconnect();
+          lkRoom.current = null;
         }
-        // LiveKit پێویستی بە تۆکنی نوێیە بۆ گۆڕینی مۆڵەت
-        await lkRoom.current.disconnect();
-        lkRoom.current.removeAllListeners();
-        lkRoom.current = null;
         connecting.current = false;
         await connectVoice();
-      } catch {}
-      if (myMicOn) toastRef.current("🎙️ ئەدمین مایکی کردیتەوە — دەتوانیت قسە بکەیت!");
+        toastRef.current("🎙️ ئەدمین مایکی کردیتەوە — دەتوانیت قسە بکەیت!");
+      } else {
+        // مۆڵەتی مایک لادەبرێت: مایک دابخە، پەیوەندی بمێنێت
+        if (lkRoom.current) {
+          try {
+            await lkRoom.current.localParticipant.setMicrophoneEnabled(false);
+          } catch {}
+        }
+      }
     })();
   }, [myMicOn, room.id, connectVoice]);
 
