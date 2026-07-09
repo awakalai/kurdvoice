@@ -62,9 +62,24 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
     const ch = supabase
       .channel("room-" + room.id)
       .on("postgres_changes", { event: "*", schema: "public", table: "room_participants", filter: `room_id=eq.${room.id}` }, loadParts)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_messages", filter: `room_id=eq.${room.id}` }, (p) =>
-        setMsgs((m) => [...m, p.new])
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "room_messages", filter: `room_id=eq.${room.id}` }, (p) => {
+        const txt = p.new?.text || "";
+        if (txt.startsWith("__MIC_GRANTED__")) {
+          const grantedUid = txt.replace("__MIC_GRANTED__", "");
+          if (grantedUid === me.id) {
+            // منم ڕێگەی پێدراوە — دووبارە پەیوەست بوونەوە
+            connecting.current = false;
+            if (lkRoom.current) {
+              lkRoom.current.removeAllListeners();
+              lkRoom.current.disconnect().catch(() => {});
+              lkRoom.current = null;
+            }
+            setTimeout(() => connectVoice(), 300);
+          }
+        } else {
+          setMsgs((m) => [...m, p.new]);
+        }
+      })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "rooms" }, (p) => {
         if (p.old && p.old.id === room.id) {
           onToast("ڕوومەکە سڕایەوە");
@@ -149,27 +164,11 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
     if (prevMic.current === myMicOn) return;
     prevMic.current = myMicOn;
 
-    (async () => {
+    // __MIC_GRANTED__ پەیامەکە ئەم کارەی دەکات — ئێرە تەنها مایک دادەخەین کاتی لابردنی مۆڵەت
+    if (!myMicOn && lkRoom.current) {
+      lkRoom.current.localParticipant?.setMicrophoneEnabled(false).catch(() => {});
       setMicLive(false);
-      if (myMicOn) {
-        // مۆڵەتی مایک دراوە: پەیوەندی نوێ بە تۆکنی نوێ (canPublish=true)
-        if (lkRoom.current) {
-          lkRoom.current.removeAllListeners();
-          await lkRoom.current.disconnect();
-          lkRoom.current = null;
-        }
-        connecting.current = false;
-        await connectVoice();
-        toastRef.current("🎙️ ئەدمین مایکی کردیتەوە — دەتوانیت قسە بکەیت!");
-      } else {
-        // مۆڵەتی مایک لادەبرێت: مایک دابخە، پەیوەندی بمێنێت
-        if (lkRoom.current) {
-          try {
-            await lkRoom.current.localParticipant.setMicrophoneEnabled(false);
-          } catch {}
-        }
-      }
-    })();
+    }
   }, [myMicOn, room.id, connectVoice]);
 
   const toggleMyMic = async () => {
@@ -187,8 +186,21 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
   const raiseHand = () =>
     supabase.from("room_participants").update({ hand: !myP.hand }).eq("room_id", room.id).eq("user_id", me.id);
 
-  const toggleMicFor = (uid, cur) =>
-    supabase.from("room_participants").update({ mic_on: !cur, hand: false }).eq("room_id", room.id).eq("user_id", uid);
+  const toggleMicFor = async (uid, cur) => {
+    // داتابەیس نوێ بکەوە
+    await supabase.from("room_participants")
+      .update({ mic_on: !cur, hand: false })
+      .eq("room_id", room.id)
+      .eq("user_id", uid);
+    // نامەیەک بنێرە بۆ چاتی ڕووم تا ئەو کەسە بزانێت دووبارە پەیوەست بێتەوە
+    if (!cur) {
+      await supabase.from("room_messages").insert({
+        room_id: room.id,
+        sender_id: me.id,
+        text: "__MIC_GRANTED__" + uid,
+      });
+    }
+  };
 
   const send = async () => {
     if (!msg.trim()) return;
