@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Reem+Kufi:wght@500;700&family=Vazirmatn:wght@400;600;700&display=swap');
+
+:root {
+  --bg: #0D1411;
+  --surface: #16211B;
+  --surface2: #1E2C24;
+  --border: #2B3D32;
+  --gold: #E8B33C;
+  --gold-soft: rgba(232, 179, 60, 0.14);
+  --red: #C9503D;
+  --green: #4CAF7D;
+  --text: #F2EDE3;
+  --muted: #93A79A;
+}
+
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Vazirmatn', 'Noto Naskh Arabic', Tahoma, sans-serif;
+}
+
+input::placeholder { color: var(--muted); }
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.12); opacity: 0.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
