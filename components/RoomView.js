@@ -11,12 +11,19 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
   const [micLive, setMicLive] = useState(false);
   const [speakingIds, setSpeakingIds] = useState([]);
   const [voiceStatus, setVoiceStatus] = useState("connecting"); // connecting | on | off
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const lkRoom = useRef(null);
   const audioBox = useRef(null);
   const endRef = useRef(null);
+  const connecting = useRef(false);
+  const toastRef = useRef(onToast);
+  toastRef.current = onToast;
 
   const isAdmin = room.admin_id === me.id;
-  const myP = parts.find((p) => p.user_id === me.id) || { mic_on: false, hand: false };
+  const myPart = parts.find((p) => p.user_id === me.id);
+  const myMicOn = myPart ? myPart.mic_on : false;
+  const myHand = myPart ? myPart.hand : false;
+  const myP = { mic_on: myMicOn, hand: myHand };
   const speakers = parts
     .filter((p) => p.mic_on)
     .sort((a, b) => (a.user_id === room.admin_id ? -1 : b.user_id === room.admin_id ? 1 : 0));
@@ -72,10 +79,24 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
   }, [room.id]); // eslint-disable-line
 
   /* ---- پەیوەستبوون بە دەنگ (LiveKit) ---- */
+  // iOS Safari: دەنگ پێویستی بە کردارێکی بەکارهێنەرە بۆ کردنەوە
+  const unlockAudio = async () => {
+    if (audioBox.current) {
+      const audios = audioBox.current.querySelectorAll("audio");
+      for (const a of audios) {
+        try { await a.play(); } catch {}
+      }
+    }
+    setAudioUnlocked(true);
+  };
+
   const connectVoice = useCallback(async () => {
+    if (connecting.current) return; // ڕێگری لە خولی دووبارە پەیوەستبوونەوە
+    connecting.current = true;
     try {
       setVoiceStatus("connecting");
       if (lkRoom.current) {
+        lkRoom.current.removeAllListeners();
         await lkRoom.current.disconnect();
         lkRoom.current = null;
       }
@@ -97,15 +118,19 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
       r.on(RoomEvent.ActiveSpeakersChanged, (sp) => setSpeakingIds(sp.map((s) => s.identity)));
       r.on(RoomEvent.Reconnecting, () => setVoiceStatus("connecting"));
       r.on(RoomEvent.Reconnected, () => setVoiceStatus("on"));
-      r.on(RoomEvent.Disconnected, () => setVoiceStatus("off"));
-      await r.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, token);
+      r.on(RoomEvent.Disconnected, () => {
+        if (lkRoom.current === r) setVoiceStatus("off");
+      });
+      await r.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, token, { autoSubscribe: true });
       lkRoom.current = r;
       setVoiceStatus("on");
     } catch (e) {
       setVoiceStatus("off");
-      onToast("پەیوەستبوون بە دەنگ سەرکەوتوو نەبوو");
+      toastRef.current("پەیوەستبوون بە دەنگ سەرکەوتوو نەبوو");
+    } finally {
+      connecting.current = false;
     }
-  }, [room.id, onToast]);
+  }, [room.id]);
 
   useEffect(() => {
     connectVoice();
@@ -114,16 +139,36 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
     };
   }, []); // eslint-disable-line
 
-  /* کاتێک مۆڵەتی مایکم دەگۆڕێت → دووبارە پەیوەستبوونەوە بە تۆکنی نوێ */
-  const prevMic = useRef(myP.mic_on);
+  /* کاتێک مۆڵەتی مایکم دەگۆڕێت → تۆکنی نوێ، بەبێ پچڕاندنی پەیوەندی */
+  const prevMic = useRef(null);
   useEffect(() => {
-    if (prevMic.current !== myP.mic_on) {
-      prevMic.current = myP.mic_on;
-      setMicLive(false);
-      connectVoice();
-      if (myP.mic_on) onToast("🎙️ ئەدمین مایکی کردیتەوە — دەتوانیت قسە بکەیت!");
+    if (prevMic.current === null) {
+      prevMic.current = myMicOn;
+      return;
     }
-  }, [myP.mic_on, connectVoice, onToast]);
+    if (prevMic.current === myMicOn) return;
+    prevMic.current = myMicOn;
+
+    (async () => {
+      if (!lkRoom.current) return;
+      try {
+        // تۆکنێکی نوێ بە مۆڵەتی نوێوە — بەبێ پچڕاندنی پەیوەندی
+        const token = await getLiveKitToken(room.id);
+        await lkRoom.current.localParticipant.setMicrophoneEnabled(false);
+        setMicLive(false);
+        if (typeof lkRoom.current.engine?.client?.sendUpdateLocalMetadata === "function") {
+          // هیچ
+        }
+        // LiveKit پێویستی بە تۆکنی نوێیە بۆ گۆڕینی مۆڵەت
+        await lkRoom.current.disconnect();
+        lkRoom.current.removeAllListeners();
+        lkRoom.current = null;
+        connecting.current = false;
+        await connectVoice();
+      } catch {}
+      if (myMicOn) toastRef.current("🎙️ ئەدمین مایکی کردیتەوە — دەتوانیت قسە بکەیت!");
+    })();
+  }, [myMicOn, room.id, connectVoice]);
 
   const toggleMyMic = async () => {
     if (!lkRoom.current) return;
@@ -180,6 +225,14 @@ export default function RoomView({ room, me, profiles, onToast, onLeave, onDelet
             <span style={{ color: voiceStatus === "on" ? C.green : voiceStatus === "connecting" ? C.gold : C.red }}>
               {voiceStatus === "on" ? "● دەنگ پەیوەستە" : voiceStatus === "connecting" ? "● پەیوەستبوون..." : "● دەنگ پچڕاوە"}
             </span>
+            {voiceStatus === "on" && !audioUnlocked && (
+              <button
+                onClick={unlockAudio}
+                style={{ marginInlineStart: 8, background: C.gold, color: "#1A1508", border: "none", borderRadius: 8, padding: "2px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}
+              >
+                🔊 دەنگ چالاک بکە
+              </button>
+            )}
           </div>
         </div>
         {voiceStatus === "off" && <Btn small kind="ghost" onClick={connectVoice}>🔄</Btn>}
